@@ -4,23 +4,37 @@ from collections import defaultdict
 from urllib.parse import urljoin
 
 import requests_cache
+from requests import RequestException
 from tqdm import tqdm
 from bs4 import BeautifulSoup
 
-from constants import BASE_DIR, MAIN_DOC_URL, PYTHON_PEPS_URL, EXPECTED_STATUS
+from constants import (
+    BASE_DIR,
+    MAIN_DOC_URL,
+    PYTHON_PEPS_URL,
+    EXPECTED_STATUS,
+    DOWNLOAD_DIR_PATH,
+)
 from configs import configure_argument_parser, configure_logging
+from exceptions import ParserFindTagException
 from outputs import control_output
 from utils import get_response, find_tag
 
 
+def _get_response_and_soup(session, url, features='lxml'):
+    response = get_response(session, url)
+    if response is None:
+        return None, None
+    soup = BeautifulSoup(response.text, features)
+    return response, soup
+
+
 def whats_new(session):
     whats_new_url = urljoin(MAIN_DOC_URL, 'whatsnew/')
-    response = get_response(session, whats_new_url)
+    response, soup = _get_response_and_soup(session, whats_new_url)
     if response is None:
         return
-    soup = BeautifulSoup(response.text, features='lxml')
-    main_div = find_tag(soup, 'section', attrs={'id': 'what-s-new-in-python'})
-    div_with_ul = find_tag(main_div, 'div', attrs={'class': 'toctree-wrapper'})
+    div_with_ul = find_tag(soup, 'div', attrs={'class': 'toctree-wrapper'})
     sections_by_python = div_with_ul.find_all(
         'li', attrs={'class': 'toctree-l1'}
     )
@@ -29,10 +43,9 @@ def whats_new(session):
         version_a_tag = find_tag(section, 'a')
         href = version_a_tag['href']
         version_link = urljoin(whats_new_url, href)
-        response = get_response(session, version_link)
+        response, soup = _get_response_and_soup(session, version_link)
         if response is None:
             continue
-        soup = BeautifulSoup(response.text, features='lxml')
         h1 = find_tag(soup, 'h1')
         dl = find_tag(soup, 'dl')
         dl_text = dl.text.replace('\n', ' ')
@@ -41,10 +54,9 @@ def whats_new(session):
 
 
 def latest_versions(session):
-    response = get_response(session, MAIN_DOC_URL)
+    response, soup = _get_response_and_soup(session, MAIN_DOC_URL)
     if response is None:
         return
-    soup = BeautifulSoup(response.text, 'lxml')
     sidebar = find_tag(soup, 'div', attrs={'class': 'sphinxsidebarwrapper'})
     ul_tags = sidebar.find_all('ul')
     for ul in ul_tags:
@@ -68,10 +80,9 @@ def latest_versions(session):
 
 def download(session):
     downloads_url = urljoin(MAIN_DOC_URL, 'download.html')
-    response = get_response(session, downloads_url)
+    response, soup = _get_response_and_soup(session, downloads_url)
     if response is None:
         return
-    soup = BeautifulSoup(response.text, 'lxml')
     main_tag = find_tag(soup, 'div', attrs={'role': 'main'})
     table_tag = find_tag(main_tag, 'table', attrs={'class': 'docutils'})
     pdf_a4_tag = find_tag(
@@ -80,7 +91,7 @@ def download(session):
     pdf_a4_link = pdf_a4_tag['href']
     archive_url = urljoin(downloads_url, pdf_a4_link)
     filename = archive_url.split('/')[-1]
-    downloads_dir = BASE_DIR / 'downloads'
+    downloads_dir = BASE_DIR / DOWNLOAD_DIR_PATH
     downloads_dir.mkdir(exist_ok=True)
     archive_path = downloads_dir / filename
     response = session.get(archive_url)
@@ -91,15 +102,14 @@ def download(session):
 
 def pep(session):
     peps_url = PYTHON_PEPS_URL
-    response = get_response(session, peps_url)
+    response, soup = _get_response_and_soup(session, peps_url)
     if response is None:
         return
-    soup = BeautifulSoup(response.text, 'lxml')
     # Получаем часть страницы в тэге <section>
     section_tag = find_tag(soup, 'section', attrs={'id': 'index-by-category'})
     # Получаем все таблицы в тэге <tbody>
     tbody_tag = section_tag.find_all('tbody')
-    results = [('Статус', 'Колличество')]
+    results = [('Status', 'Count')]
     status_counter = defaultdict(int)
     for col in tqdm(tbody_tag):
         abbr_tag = col.find_all('abbr')
@@ -115,8 +125,9 @@ def pep(session):
             status_on_table = status_col.text[1:]
             # Парсим страницу каждого pep
             current_pep_url = urljoin(PYTHON_PEPS_URL, ref_col['href'])
-            response = get_response(session, current_pep_url)
-            soup = BeautifulSoup(response.text, 'lxml')
+            response, soup = _get_response_and_soup(session, current_pep_url)
+            if response is None:
+                continue
             status_in_page = find_tag(
                 soup, 'abbr', attrs={'title': re.compile(r'\w+')}
             ).text
@@ -157,7 +168,12 @@ def main():
     if args.clear_cache:
         session.cache.clear()
     parser_mode = args.mode
-    results = MODE_TO_FUNCTION[parser_mode](session)
+    try:
+        results = MODE_TO_FUNCTION[parser_mode](session)
+    except (RequestException, ParserFindTagException) as error:
+        logging.error(f'{error.__class__.__name__} : {error.args}')
+        logging.info('Парсер завершил работу.')
+        return
     if results is not None:
         control_output(results, args)
     logging.info('Парсер завершил работу.')
