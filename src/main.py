@@ -4,9 +4,7 @@ from collections import defaultdict
 from urllib.parse import urljoin
 
 import requests_cache
-from requests import RequestException
 from tqdm import tqdm
-from bs4 import BeautifulSoup
 
 from constants import (
     BASE_DIR,
@@ -16,24 +14,14 @@ from constants import (
     DOWNLOAD_DIR_PATH,
 )
 from configs import configure_argument_parser, configure_logging
-from exceptions import ParserFindTagException
+from exceptions import ParserFindTagException, DataDoesNotExists, EmptyResponse
 from outputs import control_output
-from utils import get_response, find_tag
-
-
-def _get_response_and_soup(session, url, features='lxml'):
-    response = get_response(session, url)
-    if response is None:
-        return None, None
-    soup = BeautifulSoup(response.text, features)
-    return response, soup
+from utils import find_tag, get_response_and_soup
 
 
 def whats_new(session):
     whats_new_url = urljoin(MAIN_DOC_URL, 'whatsnew/')
-    response, soup = _get_response_and_soup(session, whats_new_url)
-    if response is None:
-        return
+    soup = get_response_and_soup(session, whats_new_url)
     div_with_ul = find_tag(soup, 'div', attrs={'class': 'toctree-wrapper'})
     sections_by_python = div_with_ul.find_all(
         'li', attrs={'class': 'toctree-l1'}
@@ -43,8 +31,9 @@ def whats_new(session):
         version_a_tag = find_tag(section, 'a')
         href = version_a_tag['href']
         version_link = urljoin(whats_new_url, href)
-        response, soup = _get_response_and_soup(session, version_link)
-        if response is None:
+        try:
+            soup = get_response_and_soup(session, version_link)
+        except EmptyResponse:
             continue
         h1 = find_tag(soup, 'h1')
         dl = find_tag(soup, 'dl')
@@ -54,9 +43,7 @@ def whats_new(session):
 
 
 def latest_versions(session):
-    response, soup = _get_response_and_soup(session, MAIN_DOC_URL)
-    if response is None:
-        return
+    soup = get_response_and_soup(session, MAIN_DOC_URL)
     sidebar = find_tag(soup, 'div', attrs={'class': 'sphinxsidebarwrapper'})
     ul_tags = sidebar.find_all('ul')
     for ul in ul_tags:
@@ -64,7 +51,7 @@ def latest_versions(session):
             a_tags = ul.find_all('a')
             break
     else:
-        raise Exception('Не найден список c версиями Python')
+        raise DataDoesNotExists('Не найден список c версиями Python')
     results = [('Ссылка на документацию', 'Версия', 'Статус')]
     pattern = r'Python (?P<version>\d\.\d+) \((?P<status>.*)\)'
     for a_tag in a_tags:
@@ -80,13 +67,9 @@ def latest_versions(session):
 
 def download(session):
     downloads_url = urljoin(MAIN_DOC_URL, 'download.html')
-    response, soup = _get_response_and_soup(session, downloads_url)
-    if response is None:
-        return
-    main_tag = find_tag(soup, 'div', attrs={'role': 'main'})
-    table_tag = find_tag(main_tag, 'table', attrs={'class': 'docutils'})
+    soup = get_response_and_soup(session, downloads_url)
     pdf_a4_tag = find_tag(
-        table_tag, 'a', attrs={'href': re.compile(r'.+pdf-a4\.zip$')}
+        soup, 'a', attrs={'href': re.compile(r'.+pdf-a4\.zip$')}
     )
     pdf_a4_link = pdf_a4_tag['href']
     archive_url = urljoin(downloads_url, pdf_a4_link)
@@ -102,9 +85,7 @@ def download(session):
 
 def pep(session):
     peps_url = PYTHON_PEPS_URL
-    response, soup = _get_response_and_soup(session, peps_url)
-    if response is None:
-        return
+    soup = get_response_and_soup(session, peps_url)
     # Получаем часть страницы в тэге <section>
     section_tag = find_tag(soup, 'section', attrs={'id': 'index-by-category'})
     # Получаем все таблицы в тэге <tbody>
@@ -125,8 +106,9 @@ def pep(session):
             status_on_table = status_col.text[1:]
             # Парсим страницу каждого pep
             current_pep_url = urljoin(PYTHON_PEPS_URL, ref_col['href'])
-            response, soup = _get_response_and_soup(session, current_pep_url)
-            if response is None:
+            try:
+                soup = get_response_and_soup(session, current_pep_url)
+            except EmptyResponse:
                 continue
             status_in_page = find_tag(
                 soup, 'abbr', attrs={'title': re.compile(r'\w+')}
@@ -170,13 +152,14 @@ def main():
     parser_mode = args.mode
     try:
         results = MODE_TO_FUNCTION[parser_mode](session)
-    except (RequestException, ParserFindTagException) as error:
+    except (EmptyResponse, DataDoesNotExists, ParserFindTagException) as error:
         logging.error(f'{error.__class__.__name__} : {error.args}')
-        logging.info('Парсер завершил работу.')
         return
-    if results is not None:
-        control_output(results, args)
-    logging.info('Парсер завершил работу.')
+    else:
+        if results is not None and len(results) > 1:
+            control_output(results, args)
+    finally:
+        logging.info('Парсер завершил работу.')
 
 
 if __name__ == '__main__':
