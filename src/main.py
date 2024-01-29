@@ -16,12 +16,12 @@ from constants import (
 from configs import configure_argument_parser, configure_logging
 from exceptions import ParserFindTagException, DataDoesNotExists, EmptyResponse
 from outputs import control_output
-from utils import find_tag, get_response_and_soup
+from utils import find_tag, get_soup
 
 
 def whats_new(session):
     whats_new_url = urljoin(MAIN_DOC_URL, 'whatsnew/')
-    soup = get_response_and_soup(session, whats_new_url)
+    soup = get_soup(session, whats_new_url)
     div_with_ul = find_tag(soup, 'div', attrs={'class': 'toctree-wrapper'})
     sections_by_python = div_with_ul.find_all(
         'li', attrs={'class': 'toctree-l1'}
@@ -32,7 +32,7 @@ def whats_new(session):
         href = version_a_tag['href']
         version_link = urljoin(whats_new_url, href)
         try:
-            soup = get_response_and_soup(session, version_link)
+            soup = get_soup(session, version_link)
         except EmptyResponse:
             continue
         h1 = find_tag(soup, 'h1')
@@ -43,7 +43,7 @@ def whats_new(session):
 
 
 def latest_versions(session):
-    soup = get_response_and_soup(session, MAIN_DOC_URL)
+    soup = get_soup(session, MAIN_DOC_URL)
     sidebar = find_tag(soup, 'div', attrs={'class': 'sphinxsidebarwrapper'})
     ul_tags = sidebar.find_all('ul')
     for ul in ul_tags:
@@ -67,7 +67,7 @@ def latest_versions(session):
 
 def download(session):
     downloads_url = urljoin(MAIN_DOC_URL, 'download.html')
-    soup = get_response_and_soup(session, downloads_url)
+    soup = get_soup(session, downloads_url)
     pdf_a4_tag = find_tag(
         soup, 'a', attrs={'href': re.compile(r'.+pdf-a4\.zip$')}
     )
@@ -85,7 +85,7 @@ def download(session):
 
 def pep(session):
     peps_url = PYTHON_PEPS_URL
-    soup = get_response_and_soup(session, peps_url)
+    soup = get_soup(session, peps_url)
     # Получаем часть страницы в тэге <section>
     section_tag = find_tag(soup, 'section', attrs={'id': 'index-by-category'})
     # Получаем все таблицы в тэге <tbody>
@@ -107,7 +107,7 @@ def pep(session):
             # Парсим страницу каждого pep
             current_pep_url = urljoin(PYTHON_PEPS_URL, ref_col['href'])
             try:
-                soup = get_response_and_soup(session, current_pep_url)
+                soup = get_soup(session, current_pep_url)
             except EmptyResponse:
                 continue
             status_in_page = find_tag(
